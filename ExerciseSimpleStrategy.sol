@@ -117,19 +117,15 @@ contract ExerciseSimpleStrategy is BaseStrategy {
     /// @notice Initializes the strategy
     /// @dev This will revert if the strategy is already initialized and 'msg.sender' is not the 'Allo' contract.
     /// @param _poolId The 'poolId' to initialize
-    /// @param _data The data to be decoded to initialize the strategy
-    /// @custom:data InitializeData(address[] memory _allowedTokens)
-    function initialize(uint256 _poolId, bytes memory _data) external virtual override {
-        (InitializeData memory initializeData) = abi.decode(_data, (InitializeData));
-        __ExerciseSimpleStrategy_init(_poolId, initializeData);
+    function initialize(uint256 _poolId, bytes memory _data) external virtual override onlyAllo {
+        __ExerciseSimpleStrategy_init(_poolId);
         emit Initialized(_poolId, _data);
     }
 
     /// @notice Initializes this strategy as well as the BaseStrategy.
-    /// @dev This will revert if the strategy is already initialized. Emits a 'TimestampsUpdated()' event.
+    /// @dev This will revert if the strategy is already initialized.
     /// @param _poolId The 'poolId' to initialize
-    /// @param _initializeData The data to be decoded to initialize the strategy
-    function __ExerciseSimpleStrategy_init(uint256 _poolId, InitializeData memory _initializeData) internal {
+    function __ExerciseSimpleStrategy_init(uint256 _poolId) internal {
         // Initialize the BaseStrategy with the '_poolId'
         __BaseStrategy_init(_poolId);
 
@@ -137,7 +133,7 @@ contract ExerciseSimpleStrategy is BaseStrategy {
         _registry = allo.getRegistry();
 
         recipientsCounter = 1;
-        _initializeData.allowedTokens[0] = NATIVE;
+        allowedTokens[NATIVE] = true;
 
     }
 
@@ -291,7 +287,7 @@ contract ExerciseSimpleStrategy is BaseStrategy {
         address recipientAddress = _getRecipient(recipientId).recipientAddress;
 
         // Validate the distribution
-        if (_validateDistribution(index, recipientId, recipientAddress, amount)) {
+        if (_validateDistribution(index, recipientId, amount)) {
             // Return a 'PayoutSummary' with the 'recipientAddress' and 'amount'
             return PayoutSummary(recipientAddress, amount);
         }
@@ -389,13 +385,11 @@ contract ExerciseSimpleStrategy is BaseStrategy {
     /// @notice Validate the distribution for the payout.
     /// @param _index index of the distribution
     /// @param _recipientId Id of the recipient
-    /// @param _recipientAddress Address of the recipient
     /// @param _amount Amount of tokens to be distributed
     /// @return 'true' if the distribution is valid, otherwise 'false'
     function _validateDistribution(
         uint256 _index,
         address _recipientId,
-        address _recipientAddress,
         uint256 _amount
     ) internal view returns (bool) {
         // If the '_index' has been distributed this will return 'false'
