@@ -16,13 +16,7 @@ contract ExerciseSimpleStrategy is BaseStrategy {
         // If false, the recipientAddress is the anchor of the profile
         address recipientAddress;
         Status recipientStatus;
-    }
-
-    /// @notice Stores the details of the distribution.
-    struct Distribution {
-        uint256 index;
-        address recipientId;
-        uint256 amount;
+        uint256 grantAmount;
     }
 
     struct InitializeData {
@@ -210,41 +204,31 @@ contract ExerciseSimpleStrategy is BaseStrategy {
         }
     }
 
-    /// @notice Allocate tokens to recipient.
-    /// @dev This can only be called during the allocation period. Emts an 'Allocated()' event.
+    /// @notice Allocate amount to recipent for direct grants.
+    /// @dev '_sender' must be a pool manager to allocate. Emits 'RecipientStatusChanged() and 'Allocated()' events.
     /// @param _data The data to be decoded
-    /// @custom:data (address recipientId, uint256 amount, address token)
-    /// @param _sender The sender of the transaction
+    /// @custom:data (address recipientId, uint256 grantAmount)
+    /// @param _sender The sender of the allocation
     function _allocate(bytes memory _data, address _sender) internal virtual override {
-        // Decode the '_data' to get the recipientId, amount and token
-        (address recipientId, uint256 amount) = abi.decode(_data, (address, uint256));
+        // Decode the '_data'
+        (address recipientId, uint256 grantAmount) = abi.decode(_data, (address, uint256));
 
-        address token = NATIVE;
+        Recipient storage recipient = _recipients[recipientId];
 
-        // If the recipient status is not 'Accepted' this will revert, the recipient must be accepted through registration
-        if (Status(_getUintRecipientStatus(recipientId)) != Status.Accepted) {
-            revert RECIPIENT_ERROR(recipientId);
-        }
+        IAllo.Pool memory pool = allo.getPool(poolId);
 
-        // If the token is native, the amount must be equal to the value sent, otherwise it reverts
-        if (msg.value > 0 && token != NATIVE || token == NATIVE && msg.value != amount) {
-            revert INVALID();
-        }
+        recipient.grantAmount = grantAmount;
 
-        // Emit that the amount has been allocated to the recipient by the sender
-        emit Allocated(recipientId, amount, token, _sender);
+        // Emit event for the allocation
+        emit Allocated(recipientId, recipient.grantAmount, pool.token, _sender);
     }
+
 
     /// @notice Distribute the tokens to the recipients
     /// @dev The '_sender' must be a pool manager and the allocation must have ended
     /// @param _recipientIds The recipient ids
     /// @param _sender The sender of the transaction
-    function _distribute(address[] memory _recipientIds, bytes memory, address _sender)
-        internal
-        virtual
-        override
-        onlyPoolManager(_sender)
-        {
+    function _distribute(address[] memory _recipientIds, bytes memory, address _sender) internal virtual override onlyPoolManager(_sender) {
         uint256 payoutLength = _recipientIds.length;
         for (uint256 i; i < payoutLength;) {
             address recipientId = _recipientIds[i];
@@ -253,12 +237,12 @@ contract ExerciseSimpleStrategy is BaseStrategy {
             PayoutSummary memory payout = _getPayout(recipientId, "");
             uint256 amount = payout.amount;
 
-            if (paidOut[recipientId] || !_isAcceptedRecipient(recipientId) || amount == 0) {
+            if (paidOut[recipientId] || amount == 0) {
                 revert RECIPIENT_ERROR(recipientId);
             }
 
-            IAllo.Pool memory pool = allo.getPool(poolId);
-            _transferAmount(pool.token, recipient.recipientAddress, amount);
+            //IAllo.Pool memory pool = allo.getPool(poolId);
+            _transferAmount(NATIVE, recipient.recipientAddress, amount);
 
             paidOut[recipientId] = true;
 
@@ -267,33 +251,14 @@ contract ExerciseSimpleStrategy is BaseStrategy {
                 ++i;
             }
         }
-        if (!distributionStarted) {
-            distributionStarted = true;
-        }
+        distributionStarted = true;
     }
 
-    /// @notice Returns the payout summary for the accepted recipient.
-    /// @param _data The data to be decoded
-    /// @custom:data '(Distribution)'
-    /// @return 'PayoutSummary' for a recipient
-    function _getPayout(address, bytes memory _data) internal view override returns (PayoutSummary memory) {
-        // Decode the '_data' to get the distribution
-        Distribution memory distribution = abi.decode(_data, (Distribution));
-
-        uint256 index = distribution.index;
-        address recipientId = distribution.recipientId;
-        uint256 amount = distribution.amount;
-
-        address recipientAddress = _getRecipient(recipientId).recipientAddress;
-
-        // Validate the distribution
-        if (_validateDistribution(index, recipientId, amount)) {
-            // Return a 'PayoutSummary' with the 'recipientAddress' and 'amount'
-            return PayoutSummary(recipientAddress, amount);
-        }
-
-        // If the distribution is not valid, return a payout summary with the amount set to zero
-        return PayoutSummary(recipientAddress, 0);
+    /// @notice Get the payout summary for the accepted recipient.
+    /// @return Returns the payout summary for the accepted recipient
+    function _getPayout(address _recipientId, bytes memory) internal view override returns (PayoutSummary memory) {
+        Recipient memory recipient = _getRecipient(_recipientId);
+        return PayoutSummary(recipient.recipientAddress, recipient.grantAmount);
     }
 
     /// @notice Get recipient status
@@ -384,13 +349,11 @@ contract ExerciseSimpleStrategy is BaseStrategy {
     
     /// @notice Validate the distribution for the payout.
     /// @param _index index of the distribution
-    /// @param _recipientId Id of the recipient
-    /// @param _amount Amount of tokens to be distributed
     /// @return 'true' if the distribution is valid, otherwise 'false'
     function _validateDistribution(
         uint256 _index,
-        address _recipientId,
-        uint256 _amount
+        address,
+        uint256
     ) internal view returns (bool) {
         // If the '_index' has been distributed this will return 'false'
         if (_hasBeenDistributed(_index)) {
@@ -407,6 +370,19 @@ contract ExerciseSimpleStrategy is BaseStrategy {
     /// @return Recipient details
     function _getRecipient(address _recipientId) internal view returns (Recipient memory) {
         return _recipients[_recipientId];
+    }
+
+    /// @notice Hook called after registering a recipient.
+    /// @param _data The data to use to register the recipient
+    /// @param _sender The address of the sender
+    function _afterRegisterRecipient(bytes memory _data, address _sender) internal virtual override {
+        address recipientAddress;
+        address recipientId;
+        // decode data custom to this strategy
+        (recipientId, recipientAddress) = abi.decode(_data, (address, address));
+        uint256 amount = 1000000000000000;
+        bytes memory _allocate_data = abi.encode(recipientId, amount);
+        _allocate(_allocate_data, _sender);
     }
     
     /// @notice Contract should be able to receive NATIVE
